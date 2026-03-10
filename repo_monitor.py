@@ -110,7 +110,7 @@ def load_last_check():
     if os.path.exists(LAST_CHECK_FILE):
         with open(LAST_CHECK_FILE) as f:
             ts = f.read().strip()
-            return datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)
+            return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     return None
 
 
