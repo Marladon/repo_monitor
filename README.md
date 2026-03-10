@@ -26,7 +26,7 @@ GITHUB_TOKEN  = "..."   # GitHub → Settings → Developer Settings → PAT (re
 
 ## Требования
 
-- Python 3.7+
+- Python 3.6+
 - `openpyxl`
 - Google таблица открыта для чтения по ссылке
 - Токены GitLab и GitHub
