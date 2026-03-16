@@ -9,9 +9,21 @@ from datetime import datetime, timezone
 from openpyxl import load_workbook
 
 # ── CONFIG ────────────────────────────────────────────────
-SHEET_ID     = ""
-GITLAB_TOKEN = ""
-GITHUB_TOKEN = ""
+from pathlib import Path
+
+def load_env():
+    env_file = Path(__file__).parent / ".env"
+    for line in env_file.read_text().splitlines():
+        if "=" in line and not line.startswith("#"):
+            key, val = line.split("=", 1)
+            os.environ[key.strip()] = val.strip()
+
+load_env()
+
+SHEET_ID     = os.environ["SHEET_ID"]
+GITLAB_TOKEN = os.environ["GITLAB_TOKEN"]
+GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+
 LAST_CHECK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_check.txt")
 # ── END CONFIG ────────────────────────────────────────────
 
