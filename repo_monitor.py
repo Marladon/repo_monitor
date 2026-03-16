@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from openpyxl import load_workbook
 
 # ── CONFIG ────────────────────────────────────────────────
-SHEET_ID = ""
+SHEET_ID     = ""
 GITLAB_TOKEN = ""
 GITHUB_TOKEN = ""
 LAST_CHECK_FILE = os.path.join(os.path.dirname(__file__), "last_check.txt")
@@ -189,7 +189,7 @@ else:
     changed_repos = []
     errors_commits = []
 
-    for repo in repos:
+    for repo in multi_dev:
         name, url = repo["name"], repo["url"]
         print(f"  Checking {name}...", end="\r")
 
