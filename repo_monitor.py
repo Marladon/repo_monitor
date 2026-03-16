@@ -4,6 +4,7 @@ import json
 import ssl
 import io
 import os
+import re
 from datetime import datetime, timezone
 from openpyxl import load_workbook
 
@@ -11,7 +12,7 @@ from openpyxl import load_workbook
 SHEET_ID     = ""
 GITLAB_TOKEN = ""
 GITHUB_TOKEN = ""
-LAST_CHECK_FILE = os.path.join(os.path.dirname(__file__), "last_check.txt")
+LAST_CHECK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_check.txt")
 # ── END CONFIG ────────────────────────────────────────────
 
 ctx = ssl._create_unverified_context()
@@ -67,6 +68,14 @@ def get_dev_branches(branches):
     return [b for b in branches if b.startswith("dev-") or b == "dev"]
 
 
+def sort_dev_branches(dev_branches):
+    """Сортировка dev-веток по версии: dev-1.4 < dev-1.5 < dev-2.0"""
+    def version_key(name):
+        nums = re.findall(r'\d+', name)
+        return [int(n) for n in nums]
+    return sorted(dev_branches, key=version_key)
+
+
 # ── Коммиты с даты ────────────────────────────────────────
 
 def get_branches_with_new_commits(url, since_dt):
@@ -104,6 +113,35 @@ def get_branches_with_new_commits(url, since_dt):
         return None
 
 
+# ── Проверка слияния ──────────────────────────────────────
+
+def check_merge(url, from_branch, to_branch):
+    """Проверяет есть ли в from_branch коммиты которых нет в to_branch.
+    Возвращает True если всё влито, False если нет, None если ошибка."""
+    try:
+        namespace, repo = parse_repo(url)
+        if "github.com" in url:
+            # compare base=to_branch, head=from_branch
+            # ahead_by > 0 означает что from_branch содержит коммиты которых нет в to_branch
+            data = api_get(
+                f"https://api.github.com/repos/{namespace}/{repo}/compare"
+                f"/{urllib.parse.quote(to_branch)}...{urllib.parse.quote(from_branch)}",
+                github_headers()
+            )
+            return data.get("ahead_by", 1) == 0
+        else:
+            path = urllib.parse.quote(f"{namespace}/{repo}", safe="")
+            data = api_get(
+                f"https://gitlab.ximc.ru/api/v4/projects/{path}/repository/compare"
+                f"?from={urllib.parse.quote(to_branch)}&to={urllib.parse.quote(from_branch)}",
+                gitlab_headers()
+            )
+            commits = data.get("commits", [])
+            return len(commits) == 0
+    except Exception:
+        return None
+
+
 # ── Утилиты ───────────────────────────────────────────────
 
 def load_last_check():
@@ -121,7 +159,8 @@ def save_last_check(dt):
 
 def load_sheet():
     url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
-    with urllib.request.urlopen(url, timeout=15, context=ctx) as resp:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
         return load_workbook(io.BytesIO(resp.read()))
 
 
@@ -160,7 +199,8 @@ for repo in repos:
     if dev is None:
         errors_dev.append(name)
     elif len(dev) > 1:
-        multi_dev.append({"name": name, "url": url, "dev_branches": dev})
+        sorted_dev = sort_dev_branches(dev)
+        multi_dev.append({"name": name, "url": url, "dev_branches": sorted_dev})
 
 print(" " * 50)
 
@@ -175,7 +215,7 @@ if errors_dev:
 
 print(f"\nАнализ завершён. Репозиториев с dev-ветками > 1: {len(multi_dev)}")
 
-# ── Блок 2: новые коммиты ─────────────────────────────────
+# ── Блок 2: новые коммиты + проверка слияний ──────────────
 print("\n" + "=" * 50)
 print("БЛОК 2 — Изменения с последней проверки")
 print("=" * 50)
@@ -191,6 +231,7 @@ else:
 
     for repo in multi_dev:
         name, url = repo["name"], repo["url"]
+        dev_branches = repo["dev_branches"]
         print(f"  Checking {name}...", end="\r")
 
         changed_branches = get_branches_with_new_commits(url, last_check)
@@ -198,13 +239,32 @@ else:
         if changed_branches is None:
             errors_commits.append(name)
         elif changed_branches:
-            changed_repos.append({"name": name, "branches": changed_branches})
+            # Проверяем слияния между соседними dev-ветками
+            merge_status = []
+            for i in range(len(dev_branches) - 1):
+                from_b = dev_branches[i]
+                to_b = dev_branches[i + 1]
+                merged = check_merge(url, from_b, to_b)
+                if merged is None:
+                    merge_status.append(f"  {from_b} -> {to_b}: ? (ошибка проверки)")
+                elif merged:
+                    merge_status.append(f"  {from_b} -> {to_b}: v влито")
+                else:
+                    merge_status.append(f"  {from_b} -> {to_b}: X не влито")
+
+            changed_repos.append({
+                "name": name,
+                "branches": changed_branches,
+                "merge_status": merge_status
+            })
 
     print(" " * 50)
 
     if changed_repos:
         for r in changed_repos:
-            print(f"  CHANGES  {r['name']} — ветки: {', '.join(r['branches'])}")
+            print(f"  CHANGES  {r['name']} — ветки с изменениями: {', '.join(r['branches'])}")
+            for line in r["merge_status"]:
+                print(f"    {line}")
     else:
         print("  Изменений не найдено")
 
