@@ -5,12 +5,11 @@ import ssl
 import io
 import os
 import re
+from pathlib import Path
 from datetime import datetime, timezone
 from openpyxl import load_workbook
 
 # ── CONFIG ────────────────────────────────────────────────
-from pathlib import Path
-
 def load_env():
     env_file = Path(__file__).parent / ".env"
     for line in env_file.read_text().splitlines():
@@ -25,9 +24,20 @@ GITLAB_TOKEN = os.environ["GITLAB_TOKEN"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 TG_TOKEN     = os.environ["TG_TOKEN"]
 TG_USER_ID   = int(os.environ["TG_USER_ID"])
-
 LAST_CHECK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_check.txt")
 # ── END CONFIG ────────────────────────────────────────────
+
+# ── Исключения слияний ────────────────────────────────────
+# Загружаются из exceptions.json рядом со скриптом
+def load_exceptions():
+    path = Path(__file__).parent / "exceptions.json"
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return {}
+
+MERGE_EXCEPTIONS = load_exceptions()
+# ── END MERGE_EXCEPTIONS ──────────────────────────────────
+
 
 ctx = ssl._create_unverified_context()
 
@@ -81,6 +91,18 @@ def tg_get_updates(offset=None):
     with urllib.request.urlopen(req, timeout=35, context=ctx) as resp:
         return json.loads(resp.read())
 
+
+
+
+def is_merge_excluded(repo_name, from_branch, to_branch):
+    """Проверяет попадает ли пара веток в список исключений."""
+    exceptions = MERGE_EXCEPTIONS.get(repo_name, [])
+    for exc_from, exc_to in exceptions:
+        from_match = exc_from == "*" or exc_from == from_branch
+        to_match = exc_to == "*" or exc_to == to_branch
+        if from_match and to_match:
+            return True
+    return False
 
 # ── Git API ───────────────────────────────────────────────
 
@@ -283,6 +305,9 @@ def run_check(chat_id):
             for i in range(len(dev_branches) - 1):
                 from_b = dev_branches[i]
                 to_b = dev_branches[i + 1]
+                if is_merge_excluded(name, from_b, to_b):
+                    merge_status.append(f"   <code>{from_b}</code> → <code>{to_b}</code>: ➖ исключено")
+                    continue
                 merged = check_merge(url, from_b, to_b)
                 if merged is None:
                     merge_status.append(f"   <code>{from_b}</code> → <code>{to_b}</code>: ❓ ошибка проверки")

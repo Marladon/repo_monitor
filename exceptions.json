@@ -1,0 +1,13 @@
+{
+    "xilab": [
+        ["*", "dev-2.1"],
+        ["dev-2.1", "*"]
+    ],
+    "autoloader": [
+        ["dev-1.2-URMC", "dev-1.3-8smc5"]
+    ],
+    "ximc": [
+        ["*", "dev-8.0-urmc"],
+        ["dev-8.0-urmc", "*"]
+    ]
+}
