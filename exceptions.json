@@ -12,6 +12,7 @@
     ],
     "ximc": [
         ["*", "dev-8.0-urmc"],
-        ["dev-8.0-urmc", "*"]
+        ["dev-8.0-urmc", "*"],
+		["dev-6.0-mdrive_muv_special", "*"]
     ]
 }

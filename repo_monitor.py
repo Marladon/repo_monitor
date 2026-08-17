@@ -281,15 +281,15 @@ else:
                 from_b = dev_branches[i]
                 to_b = dev_branches[i + 1]
                 if is_merge_excluded(name, from_b, to_b):
-                    merge_status.append(f"  {from_b} -> {to_b}: — исключено")
+                    merge_status.append(f"  В репозитории {name} ветка {from_b} -> {to_b}: исключено")
                     continue
                 merged = check_merge(url, from_b, to_b)
                 if merged is None:
-                    merge_status.append(f"  {from_b} -> {to_b}: ? (ошибка проверки)")
+                    merge_status.append(f"  В репозитории {name} ветка {from_b} -> {to_b}: ошибка проверки")
                 elif merged:
-                    merge_status.append(f"  {from_b} -> {to_b}: v влито")
+                    pass  # влито — не выводим
                 else:
-                    merge_status.append(f"  {from_b} -> {to_b}: X не влито")
+                    merge_status.append(f"  В репозитории {name} ветка {from_b} не влита в {to_b}")
 
             changed_repos.append({
                 "name": name,
@@ -301,9 +301,10 @@ else:
 
     if changed_repos:
         for r in changed_repos:
-            print(f"  CHANGES  {r['name']} — ветки с изменениями: {', '.join(r['branches'])}")
+            print(f"  {r['name']} — изменения в: {', '.join(r['branches'])}")
             for line in r["merge_status"]:
                 print(f"    {line}")
+            print()
     else:
         print("  Изменений не найдено")
 
