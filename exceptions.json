@@ -13,6 +13,11 @@
     "ximc": [
         ["*", "dev-8.0-urmc"],
         ["dev-8.0-urmc", "*"],
-		["dev-6.0-mdrive_muv_special", "*"]
+		["dev-6.0-mdrive_muv_special", "*"],
+		["dev-7.0-hex", "*"]
+    ],
+	"umotor_ksu": [
+        ["*", "dev-3.1-bugfixed"],
+        ["dev-3.1-bugfixed", "*"]
     ]
 }
