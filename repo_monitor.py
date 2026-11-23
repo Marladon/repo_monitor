@@ -82,7 +82,8 @@ def get_branches(url):
                 gitlab_headers()
             )
             return [b["name"] for b in data]
-    except Exception:
+    except Exception as e:
+        API_ERRORS[url] = describe_error(e)
         return None
 
 
@@ -93,11 +94,33 @@ def get_dev_branches(branches):
 
 
 def sort_dev_branches(dev_branches):
-    """Сортировка dev-веток по версии: dev-1.4 < dev-1.5 < dev-2.0"""
+    """Сортировка dev-веток по версии (major.minor): dev-1.4 < dev-1.5 < dev-2.0.
+    Суффикс-комментарий в ключ не входит, внутри одной версии порядок по имени."""
     def version_key(name):
-        nums = re.findall(r'\d+', name)
-        return [int(n) for n in nums]
+        m = re.match(r'dev-(\d+)\.(\d+)', name)
+        if m:
+            return (int(m.group(1)), int(m.group(2)), name)
+        return (10**9, 0, name)  # нестандартные имена - в конец
     return sorted(dev_branches, key=version_key)
+
+
+# Служебные коммиты, из-за которых ветка формально "не влита", но подливать не нужно
+IGNORED_COMMIT_PREFIXES = ("version increment", "empty commit for version tag")
+
+
+def is_service_commit(message):
+    first_line = (message or "").strip().splitlines()[0].strip().lower() if (message or "").strip() else ""
+    return first_line.startswith(IGNORED_COMMIT_PREFIXES)
+
+
+# Причины ошибок API по репозиториям (для вывода вместо молчаливого None)
+API_ERRORS = {}
+
+
+def describe_error(e):
+    if isinstance(e, urllib.error.HTTPError):
+        return f"HTTP {e.code}"
+    return type(e).__name__
 
 
 
@@ -114,16 +137,13 @@ def is_merge_excluded(repo_name, from_branch, to_branch):
 
 # ── Коммиты с даты ────────────────────────────────────────
 
-def get_branches_with_new_commits(url, since_dt):
+def get_branches_with_new_commits(url, since_dt, branches):
+    """Возвращает те из переданных веток (только dev), где есть коммиты с since_dt."""
     since_str = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     namespace, repo = parse_repo(url)
     changed = []
 
     try:
-        branches = get_branches(url)
-        if not branches:
-            return None
-
         for branch in branches:
             if "github.com" in url:
                 data = api_get(
@@ -145,7 +165,8 @@ def get_branches_with_new_commits(url, since_dt):
 
         return changed
 
-    except Exception:
+    except Exception as e:
+        API_ERRORS[url] = describe_error(e)
         return None
 
 
@@ -164,7 +185,13 @@ def check_merge(url, from_branch, to_branch):
                 f"/{urllib.parse.quote(to_branch)}...{urllib.parse.quote(from_branch)}",
                 github_headers()
             )
-            return data.get("ahead_by", 1) == 0
+            if data.get("ahead_by", 1) == 0:
+                return True
+            # Не влиты только служебные коммиты (Version increment и т.п.) - считаем влитым
+            commits = data.get("commits", [])
+            if commits and len(commits) == data.get("ahead_by"):
+                return all(is_service_commit(c["commit"]["message"]) for c in commits)
+            return False
         else:
             path = urllib.parse.quote(f"{namespace}/{repo}", safe="")
             data = api_get(
@@ -173,8 +200,9 @@ def check_merge(url, from_branch, to_branch):
                 gitlab_headers()
             )
             commits = data.get("commits", [])
-            return len(commits) == 0
-    except Exception:
+            return all(is_service_commit(c.get("message") or c.get("title")) for c in commits)
+    except Exception as e:
+        API_ERRORS[url] = describe_error(e)
         return None
 
 
@@ -233,12 +261,12 @@ for repo in repos:
     dev = get_dev_branches(branches)
 
     if dev is None:
-        errors_dev.append(name)
+        errors_dev.append(f"{name} ({API_ERRORS.get(url, '?')})")
     elif len(dev) > 1:
         sorted_dev = sort_dev_branches(dev)
         multi_dev.append({"name": name, "url": url, "dev_branches": sorted_dev})
 
-print(" " * 50)
+print(" " * 120, end="\r")
 
 if multi_dev:
     for r in multi_dev:
@@ -270,38 +298,50 @@ else:
         dev_branches = repo["dev_branches"]
         print(f"  Checking {name}...", end="\r")
 
-        changed_branches = get_branches_with_new_commits(url, last_check)
+        # Только dev-ветки: правило касается слияния dev-веток
+        changed_branches = get_branches_with_new_commits(url, last_check, dev_branches)
 
         if changed_branches is None:
             errors_commits.append(name)
-        elif changed_branches:
-            # Проверяем слияния между соседними dev-ветками
-            merge_status = []
-            for i in range(len(dev_branches) - 1):
-                from_b = dev_branches[i]
-                to_b = dev_branches[i + 1]
-                if is_merge_excluded(name, from_b, to_b):
-                    merge_status.append(f"  В репозитории {name} ветка {from_b} -> {to_b}: исключено")
-                    continue
-                merged = check_merge(url, from_b, to_b)
-                if merged is None:
-                    merge_status.append(f"  В репозитории {name} ветка {from_b} -> {to_b}: ошибка проверки")
-                elif merged:
-                    pass  # влито — не выводим
-                else:
-                    merge_status.append(f"  В репозитории {name} ветка {from_b} не влита в {to_b}")
+            continue
 
+        # Слияния проверяем во всех репозиториях с несколькими dev-ветками,
+        # независимо от наличия новых коммитов: не слитые ветки нужно выписывать всегда
+        merge_status = []
+        for i in range(len(dev_branches) - 1):
+            from_b = dev_branches[i]
+            to_b = dev_branches[i + 1]
+            if is_merge_excluded(name, from_b, to_b):
+                merge_status.append(f"  В репозитории {name} ветка {from_b} -> {to_b}: исключено")
+                continue
+            merged = check_merge(url, from_b, to_b)
+            if merged is None:
+                merge_status.append(f"  В репозитории {name} ветка {from_b} -> {to_b}: ошибка проверки")
+                errors_commits.append(name)
+            elif merged:
+                pass  # влито (или только служебные коммиты) — не выводим
+            else:
+                merge_status.append(f"  В репозитории {name} ветка {from_b} не влита в {to_b}")
+
+        # Показываем репозиторий, если были изменения или есть не слитые/ошибочные пары
+        # (строки "исключено" сами по себе не повод показывать репозиторий)
+        has_problem = any("исключено" not in s for s in merge_status)
+        if changed_branches or has_problem:
             changed_repos.append({
                 "name": name,
                 "branches": changed_branches,
                 "merge_status": merge_status
             })
 
-    print(" " * 50)
+    print(" " * 120, end="\r")
+    print()
 
     if changed_repos:
         for r in changed_repos:
-            print(f"  {r['name']} — изменения в: {', '.join(r['branches'])}")
+            if r["branches"]:
+                print(f"  {r['name']} — изменения в: {', '.join(r['branches'])}")
+            else:
+                print(f"  {r['name']} — новых коммитов в dev-ветках нет")
             for line in r["merge_status"]:
                 print(f"    {line}")
             print()
@@ -309,7 +349,9 @@ else:
         print("  Изменений не найдено")
 
     if errors_commits:
-        print(f"\n  Ошибки API ({len(errors_commits)}): {', '.join(errors_commits)}")
-
-    save_last_check(now)
-    print(f"\nПроверка завершена. {now.strftime('%Y-%m-%d %H:%M UTC')} сохранено как время последней проверки.")
+        uniq = list(dict.fromkeys(errors_commits))
+        print(f"\n  Ошибки API ({len(uniq)}): {', '.join(uniq)}")
+        print("  Время последней проверки НЕ обновлено, чтобы не потерять изменения. Исправьте ошибки и запустите снова.")
+    else:
+        save_last_check(now)
+        print(f"\nПроверка завершена. {now.strftime('%Y-%m-%d %H:%M UTC')} сохранено как время последней проверки.")
